@@ -74,8 +74,11 @@ export class LCT21001 {
     private destroy: (() => any) | undefined;
 
     private connectedModel: LCTDeviceModel | undefined;
+    private userConfig: any;
 
-    constructor() {}
+    constructor(userConfig?: any) {
+        this.userConfig = userConfig;
+    }
 
     public getConnectedModel(): LCTDeviceModel | undefined {
         return this.connectedModel;
@@ -91,39 +94,106 @@ export class LCT21001 {
     }
 
     /**
-     * Initialize bluetooth communication and attempt to connect to device
+     * Automatically scans and connects to the previously connected device if available.
+     * @returns {Promise<boolean>} True if successfully connected, false otherwise.
      */
-    async connect(deviceUUID: string) {
-        this.device = await this.adapter.getDevice(deviceUUID);
+    async autoScanAndConnect(): Promise<boolean> {
+        console.log('[AutoConnect] Starting...');
+        let previouslyConnectedUUID;
 
-        let rssi, deviceName: string;
-        try { rssi = await this.device.getRSSI(); } catch (err) {}
-        if (rssi === undefined) {
-            throw Error('connect(): device appears offline/unavailable');
+        if (this.userConfig) {
+            previouslyConnectedUUID = await this.userConfig.get('aquarisDeviceUUID');
+            console.log(`[AutoConnect] Found previous UUID from config: ${previouslyConnectedUUID}`);
         }
+
+        if (!previouslyConnectedUUID) {
+            console.log('[AutoConnect] No previously connected device UUID found in config.');
+            return false;
+        }
+
+        console.log('[AutoConnect] Starting discovery...');
+        const isDiscovering = await this.startDiscover();
+        if (!isDiscovering) {
+            console.log('[AutoConnect] Failed to start discovery.');
+            return false;
+        }
+
+        // Add a delay to allow time for devices to be found
+        console.log('[AutoConnect] Waiting 2 seconds for discovery...');
+        await sleep(2000); // Wait 2 seconds
+
+        console.log('[AutoConnect] Getting device list...');
+        const devices = await this.getDeviceList();
+        console.log(`[AutoConnect] Found ${devices.length} potential Aquaris devices during scan.`);
+        // It's often better to stop discovery *after* attempting connection,
+        // but let's keep it here for now based on original logic.
+        await this.stopDiscover();
+        console.log('[AutoConnect] Stopped discovery.');
+
+        const targetDevice = devices.find(device => device.uuid === previouslyConnectedUUID);
+        if (!targetDevice) {
+            console.log(`[AutoConnect] Previously connected device (${previouslyConnectedUUID}) not found in the scanned list.`);
+            return false;
+        }
+        console.log(`[AutoConnect] Found target device in list: ${targetDevice.uuid} (${targetDevice.name})`);
 
         try {
-            deviceName = await this.device.getName();
+            console.log(`[AutoConnect] Attempting to connect to ${targetDevice.uuid}...`);
+            await this.connect(targetDevice.uuid); // connect() already saves the UUID via userConfig
+            console.log(`[AutoConnect] Successfully connected to ${targetDevice.uuid}`);
+            return true;
         } catch (err) {
-            throw Error('connect(): failed reading name');
+            console.log(`[AutoConnect] Failed to connect to ${targetDevice.uuid}: ${err}`);
+            // Ensure disconnect is called if connect fails partially
+            await this.disconnect().catch(e => console.log(`[AutoConnect] Error during cleanup disconnect: ${e}`));
+            return false;
         }
+    }
 
-        const connectionTimeout = sleep(5000, 'timeout');
-        const connect = this.device.connect();
+    /**
+     * Connect to device with given UUID
+     */
+    async connect(deviceUUID: string) {
+        try {
+            if (this.device !== undefined && await this.device.isConnected()) {
+                await this.disconnect();
+            }
 
-        const result = await Promise.race([connect, connectionTimeout]);
-        if (result === 'timeout') {
-            await this.device.disconnect();
-            return;
+            if (this.adapter === undefined) {
+                const { bluetooth, destroy } = createBluetooth();
+                this.destroy = destroy;
+                this.adapter = await bluetooth.defaultAdapter();
+            }
+
+            this.device = await this.adapter.getDevice(deviceUUID);
+            const deviceName = await this.device.getName();
+            
+            // Store the device UUID for future auto-connect
+            if (this.userConfig) {
+                await this.userConfig.set('aquarisDeviceUUID', deviceUUID);
+            }
+            
+            // Create timeout promise to avoid hanging if connection fails
+            const connectionTimeout = sleep(5000, 'timeout');
+            const connect = this.device.connect();
+            
+            const result = await Promise.race([connect, connectionTimeout]);
+            if (result === 'timeout') {
+                await this.device.disconnect();
+                throw new Error('Connection timeout');
+            }
+
+            const gattServer = await this.device.gatt();
+
+            const uartService = await gattServer.getPrimaryService(LCT21001.NORDIC_UART_SERVICE_UUID);
+            this.uartTx = await uartService.getCharacteristic(LCT21001.NORDIC_UART_CHAR_TX);
+            this.uartRx = await uartService.getCharacteristic(LCT21001.NORDIC_UART_CHAR_RX);
+
+            this.connectedModel = await this.deviceModelFromName(deviceName);
+        } catch (err) {
+            await this.disconnect();
+            throw err;
         }
-
-        const gattServer = await this.device.gatt();
-
-        const uartService = await gattServer.getPrimaryService(LCT21001.NORDIC_UART_SERVICE_UUID);
-        this.uartTx = await uartService.getCharacteristic(LCT21001.NORDIC_UART_CHAR_TX);
-        this.uartRx = await uartService.getCharacteristic(LCT21001.NORDIC_UART_CHAR_RX);
-
-        this.connectedModel = await this.deviceModelFromName(deviceName);
     }
 
     /**

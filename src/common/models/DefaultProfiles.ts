@@ -59,7 +59,7 @@ const maxEnergySave: ITccProfile = {
         useMaxPerfGov: false,
         scalingMinFrequency: undefined,
         scalingMaxFrequency: undefined,
-        governor: 'powersave', // unused: see CpuWorker.ts->applyCpuProfile(...)
+        governor: 'performance', // unused: see CpuWorker.ts->applyCpuProfile(...)
         energyPerformancePreference: 'balance_performance',
         noTurbo: false
     },
@@ -98,7 +98,7 @@ const silent: ITccProfile = {
         useMaxPerfGov: false,
         scalingMinFrequency: undefined,
         scalingMaxFrequency: undefined,
-        governor: 'powersave', // unused: see CpuWorker.ts->applyCpuProfile(...)
+        governor: 'performance', // unused: see CpuWorker.ts->applyCpuProfile(...)
         energyPerformancePreference: 'balance_performance',
         noTurbo: false
     },
@@ -137,7 +137,7 @@ const office: ITccProfile = {
         useMaxPerfGov: false,
         scalingMinFrequency: undefined,
         scalingMaxFrequency: undefined,
-        governor: 'powersave', // unused: see CpuWorker.ts->applyCpuProfile(...)
+        governor: 'performance', // unused: see CpuWorker.ts->applyCpuProfile(...)
         energyPerformancePreference: 'balance_performance',
         noTurbo: false
     },
@@ -176,8 +176,8 @@ const highPerformance: ITccProfile = {
         useMaxPerfGov: false,
         scalingMinFrequency: undefined,
         scalingMaxFrequency: undefined,
-        governor: 'powersave', // unused: see CpuWorker.ts->applyCpuProfile(...)
-        energyPerformancePreference: 'balance_performance',
+        governor: 'performance', // unused: see CpuWorker.ts->applyCpuProfile(...)
+        energyPerformancePreference: 'performance',
         noTurbo: false
     },
     webcam: {
@@ -199,11 +199,11 @@ const highPerformance: ITccProfile = {
 
 export const defaultCustomProfile: ITccProfile = {
     id: defaultCustomProfileID,
-    name: 'TUXEDO Defaults',
-    description: 'Edit profile to change behaviour',
+    name: 'High Performance i9',
+    description: 'Optimized for i9-12900H',
     display: {
         brightness: 100,
-        useBrightness: false,
+        useBrightness: true,
         refreshRate: -1,
         useRefRate: false,
         xResolution: -1,
@@ -212,11 +212,11 @@ export const defaultCustomProfile: ITccProfile = {
     },
     cpu: {
         onlineCores: undefined,
-        useMaxPerfGov: false,
+        useMaxPerfGov: true,
         scalingMinFrequency: undefined,
         scalingMaxFrequency: undefined,
-        governor: 'powersave', // unused: see CpuWorker.ts->applyCpuProfile(...)
-        energyPerformancePreference: 'balance_performance',
+        governor: 'performance',
+        energyPerformancePreference: 'performance',
         noTurbo: false
     },
     webcam: {
@@ -225,14 +225,14 @@ export const defaultCustomProfile: ITccProfile = {
     },
     fan: {
         useControl: true,
-        fanProfile: 'Balanced',
-        minimumFanspeed: 0,
+        fanProfile: 'Performance',
+        minimumFanspeed: 30,
         maximumFanspeed: 100,
         offsetFanspeed: 0,
         customFanCurve: customFanPreset,
     },
-    odmProfile: { name: undefined },
-    odmPowerLimits: { tdpValues: [] },
+    odmProfile: { name: 'overboost' },
+    odmPowerLimits: { tdpValues: [45, 65, 95] },
     nvidiaPowerCTRLProfile: { cTGPOffset: 0 }
 };
 
@@ -254,7 +254,7 @@ export const defaultMobileCustomProfileTDP: ITccProfile = {
         useMaxPerfGov: false,
         scalingMinFrequency: undefined,
         scalingMaxFrequency: 3500000,
-        governor: 'powersave', // unused: see CpuWorker.ts->applyCpuProfile(...)
+        governor: 'performance', // unused: see CpuWorker.ts->applyCpuProfile(...)
         energyPerformancePreference: 'balance_performance',
         noTurbo: false
     },
@@ -293,7 +293,7 @@ export const defaultMobileCustomProfileCl: ITccProfile = {
         useMaxPerfGov: false,
         scalingMinFrequency: undefined,
         scalingMaxFrequency: 3500000,
-        governor: 'powersave', // unused: see CpuWorker.ts->applyCpuProfile(...)
+        governor: 'performance', // unused: see CpuWorker.ts->applyCpuProfile(...)
         energyPerformancePreference: 'balance_performance',
         noTurbo: false
     },
@@ -333,7 +333,7 @@ const highPerformance25WcTGP: ITccProfile = {
         useMaxPerfGov: false,
         scalingMinFrequency: undefined,
         scalingMaxFrequency: undefined,
-        governor: 'powersave', // unused: see CpuWorker.ts->applyCpuProfile(...)
+        governor: 'performance', // unused: see CpuWorker.ts->applyCpuProfile(...)
         energyPerformancePreference: 'balance_performance',
         noTurbo: false
     },
@@ -372,7 +372,7 @@ export const defaultCustomProfile25WcTGP: ITccProfile = {
         useMaxPerfGov: false,
         scalingMinFrequency: undefined,
         scalingMaxFrequency: undefined,
-        governor: 'powersave', // unused: see CpuWorker.ts->applyCpuProfile(...)
+        governor: 'performance', // unused: see CpuWorker.ts->applyCpuProfile(...)
         energyPerformancePreference: 'balance_performance',
         noTurbo: false
     },

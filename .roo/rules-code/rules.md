@@ -1,0 +1,2 @@
+- When generating mermaid diagrams, use the `mermaid` code block. Enclose all labels with double quotes.
+- In Sequence diagrams, user mermaid also and watch out for inactivation errors.

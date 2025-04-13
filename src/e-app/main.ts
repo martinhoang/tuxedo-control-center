@@ -31,6 +31,11 @@ import { NgTranslations, profileIdToI18nId } from './NgTranslations';
 import { OpenDialogReturnValue, SaveDialogReturnValue } from 'electron/main';
 import electron = require("electron");
 
+// Helper function for delay
+function sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // Tweak to get correct dirname for resource files outside app.asar
 const appPath = __dirname.replace('app.asar/', '');
 
@@ -194,8 +199,11 @@ async function initTray() {
 }
 
 async function initMain() {
+    console.log('[Main] initMain started.'); // Log start
     if (!trayOnlyOption) {
+        console.log('[Main] trayOnlyOption is false, calling activateTccGui...'); // Log before call
         await activateTccGui();
+        console.log('[Main] activateTccGui finished in initMain.'); // Log after call
     }
 
     if (!noTccdVersionCheck) {
@@ -284,7 +292,9 @@ async function activateTccGui(module?: string) {
         if (!tccWindowLoading) {
             tccWindowLoading = true;
             const langId = await userConfig.get('langId');
+            console.log(`[Main] activateTccGui: Calling createTccWindow with langId=${langId}, module=${module}`); // Log before create
             await createTccWindow(langId, module);
+            console.log('[Main] activateTccGui: createTccWindow finished.'); // Log after create
             tccWindowLoading = false;
         }
     }
@@ -531,6 +541,7 @@ async function getActiveProfile(dbus: TccDBusController): Promise<TccProfile> {
 }
 
 async function createTccWindow(langId: string, module?: string) {
+    console.log('[Main] createTccWindow started.'); // Log start of function
     let windowWidth = 1250;
     let windowHeight = 770;
     if (windowWidth > screen.getPrimaryDisplay().workAreaSize.width) {
@@ -589,6 +600,8 @@ async function createTccWindow(langId: string, module?: string) {
     } else {
         await tccWindow.loadFile(indexPath);
     }
+    console.log('[Main] createTccWindow finished loading file/URL.'); // Log after loadFile
+    // tccWindow.show(); // Explicitly show the window after loading
 }
 
 ipcMain.on('show-tcc-window', (event, arg) => {
@@ -1011,7 +1024,7 @@ async function aquarisConnectedDemo() {
 }
 
 let devicesList: DeviceInfo[] = [];
-const aquaris = new LCT21001();
+const aquaris = new LCT21001(userConfig); // Pass userConfig here
 const aquarisHandlers = new Map<string, (...args: any[]) => any>()
     .set(ClientAPI.prototype.connect.name, async (deviceUUID) => {
         aquarisConnectProgress = true;
@@ -1141,6 +1154,65 @@ const aquarisHandlers = new Map<string, (...args: any[]) => any>()
     .set(ClientAPI.prototype.saveState.name, async () => {
         if (await aquarisConnectedDemo()) return;
         await userConfig.set('aquarisSaveState', JSON.stringify(aquarisStateCurrent));
-    });
+    })
+    // Add handler for autoScanAndConnect with retry logic
+    // .set(ClientAPI.prototype.autoScanAndConnect.name, async () => {
+    //     console.log('[IPC Handler] autoScanAndConnect invoked.');
+    //     const MAX_RETRIES = 3;
+    //     const RETRY_DELAY_MS = 3000; // 3 seconds
+
+    //     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    //         console.log(`[AutoConnect Handler] Attempt ${attempt}/${MAX_RETRIES}...`);
+    //         // Ensure connect isn't already in progress from another source/previous attempt
+    //         if (!aquarisConnectProgress && !await aquaris.isConnected()) {
+    //             aquarisConnectProgress = true;
+    //             try {
+    //                 const connected = await aquaris.autoScanAndConnect(); // This function now includes logs and delay
+    //                 if (connected) {
+    //                     console.log(`[AutoConnect Handler] Successfully connected on attempt ${attempt}.`);
+    //                     // Load saved state or default
+    //                     aquarisStateCurrent = {
+    //                         deviceUUID: await userConfig.get('aquarisDeviceUUID'),
+    //                         red: 255, green: 0, blue: 0, ledMode: RGBState.Static,
+    //                         fanDutyCycle: 50, pumpDutyCycle: 60, pumpVoltage: PumpVoltage.V8,
+    //                         ledOn: true, fanOn: true, pumpOn: true
+    //                     };
+    //                     const aquarisSavedSerialized = await userConfig.get('aquarisSaveState');
+    //                     if (aquarisSavedSerialized !== undefined) {
+    //                         aquarisStateExpected = JSON.parse(aquarisSavedSerialized) as AquarisState;
+    //                         aquarisStateExpected.deviceUUID = aquarisStateCurrent.deviceUUID;
+    //                     } else {
+    //                         aquarisStateExpected = Object.assign({}, aquarisStateCurrent);
+    //                     }
+    //                     await updateDeviceState(aquaris, aquarisStateCurrent, aquarisStateExpected, true);
+    //                     aquarisConnectProgress = false; // Release lock on success
+    //                     return true; // Exit loop and handler on success
+    //                 } else {
+    //                      console.log(`[AutoConnect Handler] Attempt ${attempt} failed (autoScanAndConnect returned false).`);
+    //                 }
+    //             } catch (err) {
+    //                 console.error(`[AutoConnect Handler] Error during attempt ${attempt}:`, err);
+    //                 // Potentially add more specific error handling if needed
+    //             } finally {
+    //                 aquarisConnectProgress = false; // Release lock after attempt (success or fail)
+    //             }
+    //         } else {
+    //              console.log(`[AutoConnect Handler] Skipping attempt ${attempt} as connection is already established or in progress.`);
+    //              if (await aquaris.isConnected()) {
+    //                  return true; // Already connected, return true
+    //              }
+    //         }
+
+    //         // If not connected and not the last attempt, wait before retrying
+    //         if (attempt < MAX_RETRIES && !await aquaris.isConnected()) {
+    //             console.log(`[AutoConnect Handler] Waiting ${RETRY_DELAY_MS / 1000} seconds before next attempt...`);
+    //             await sleep(RETRY_DELAY_MS);
+    //         }
+    //     }
+
+    //     console.log(`[AutoConnect Handler] Failed to connect after ${MAX_RETRIES} attempts.`);
+    //     return false; // Return false after all retries failed
+    // })
+    ;
 
 registerAPI(ipcMain, aquarisAPIHandle, aquarisHandlers);
