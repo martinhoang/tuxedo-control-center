@@ -111,43 +111,142 @@ export class LCT21001 {
             return false;
         }
 
-        console.log('[AutoConnect] Starting discovery...');
-        const isDiscovering = await this.startDiscover();
+        // Ensure adapter exists before trying to get device or scan
+        if (this.adapter === undefined) {
+            try {
+                console.log('[AutoConnect] Adapter is undefined, creating new bluetooth instance for check...');
+                const { bluetooth, destroy } = createBluetooth();
+                this.destroy = destroy; // Store destroy for potential later cleanup
+                this.adapter = await bluetooth.defaultAdapter();
+                console.log('[AutoConnect] New bluetooth instance created.');
+            } catch (err) {
+                 console.log('[AutoConnect] Failed to create Bluetooth adapter:', err);
+                 return false; // Cannot proceed without adapter
+            }
+        }
+
+        // --- Check if already connected ---
+        let alreadyConnected = false;
+        try {
+            console.log(`[AutoConnect] Checking connection status for ${previouslyConnectedUUID} before scanning...`);
+            // Attempt to get the device handle directly
+            const potentialDevice = await this.adapter.getDevice(previouslyConnectedUUID);
+            if (potentialDevice) {
+                console.log(`[AutoConnect] Got device handle for ${previouslyConnectedUUID}.`);
+                this.device = potentialDevice; // Assign to class member
+                alreadyConnected = await this.isConnected(); // Use the class method which returns boolean
+                console.log(`[AutoConnect] isConnected status: ${alreadyConnected}`);
+            } else {
+                 console.log(`[AutoConnect] Could not get device handle for ${previouslyConnectedUUID} without scanning.`);
+            }
+        } catch (err) {
+            console.log(`[AutoConnect] Error checking initial connection status for ${previouslyConnectedUUID}: ${err.message}. Proceeding to scan.`);
+            alreadyConnected = false;
+            this.device = undefined; // Clear potentially invalid device handle
+        }
+
+        if (alreadyConnected) {
+            console.log(`[AutoConnect] Device ${previouslyConnectedUUID} appears connected. Attempting to reuse connection...`);
+            try {
+                // Try getting GATT services directly to validate the existing connection
+                const gattServer = await this.device.gatt();
+                const uartService = await gattServer.getPrimaryService(LCT21001.NORDIC_UART_SERVICE_UUID);
+                this.uartTx = await uartService.getCharacteristic(LCT21001.NORDIC_UART_CHAR_TX);
+                this.uartRx = await uartService.getCharacteristic(LCT21001.NORDIC_UART_CHAR_RX);
+                // Get model name if possible
+                try {
+                     const deviceName = await this.device.getName();
+                     this.connectedModel = await this.deviceModelFromName(deviceName);
+                } catch (nameErr) {
+                     console.log(`[AutoConnect] Could not get device name while reusing connection: ${nameErr.message}`);
+                     this.connectedModel = undefined; // Or try a default?
+                }
+                console.log('[AutoConnect] Successfully reused existing connection and GATT services.');
+                // Store UUID again in case it wasn't set properly before crash
+                 if (this.userConfig) {
+                    await this.userConfig.set('aquarisDeviceUUID', previouslyConnectedUUID);
+                 }
+                return true; // Successfully reused connection
+            } catch (gattErr) {
+                 console.log(`[AutoConnect] Failed to reuse existing connection (GATT error: ${gattErr.message}). Forcing reconnect...`);
+                 // Fallback to forced reconnect if reusing GATT failed
+                 try {
+                     await this.connect(previouslyConnectedUUID); // connect() handles disconnect first
+                     const verified = await this.isConnected();
+                     console.log(`[AutoConnect] Forced reconnect successful: ${verified}`);
+                     return verified;
+                 } catch (reconnectErr) {
+                      console.log(`[AutoConnect] Error during forced reconnect after GATT reuse failed: ${reconnectErr}`);
+                      return false;
+                 }
+            }
+        }
+
+        // --- If not already connected, proceed with scanning ---
+        console.log('[AutoConnect] Device not connected. Starting discovery...');
+        const isDiscovering = await this.startDiscover(); // Uses existing or creates new adapter if needed
         if (!isDiscovering) {
             console.log('[AutoConnect] Failed to start discovery.');
+            // Clean up adapter if we created it just for this attempt
+            if (this.destroy) {
+                this.destroy();
+                this.destroy = undefined;
+                this.adapter = undefined;
+            }
             return false;
         }
 
-        // Add a delay to allow time for devices to be found
         console.log('[AutoConnect] Waiting 2 seconds for discovery...');
-        await sleep(2000); // Wait 2 seconds
+        await sleep(2000);
 
         console.log('[AutoConnect] Getting device list...');
         const devices = await this.getDeviceList();
         console.log(`[AutoConnect] Found ${devices.length} potential Aquaris devices during scan.`);
-        // It's often better to stop discovery *after* attempting connection,
-        // but let's keep it here for now based on original logic.
+
+        const targetDevice = devices.find(device => device.uuid === previouslyConnectedUUID);
+
+        // Stop discovery *after* getting list and finding target, but *before* connecting
+        // This seems necessary based on previous errors, keep adapter alive.
         await this.stopDiscover();
         console.log('[AutoConnect] Stopped discovery.');
 
-        const targetDevice = devices.find(device => device.uuid === previouslyConnectedUUID);
         if (!targetDevice) {
             console.log(`[AutoConnect] Previously connected device (${previouslyConnectedUUID}) not found in the scanned list.`);
+            // Clean up adapter if we created it just for this attempt
+             if (this.destroy) {
+                 this.destroy();
+                 this.destroy = undefined;
+                 this.adapter = undefined;
+             }
             return false;
         }
         console.log(`[AutoConnect] Found target device in list: ${targetDevice.uuid} (${targetDevice.name})`);
 
+        let connected = false;
         try {
             console.log(`[AutoConnect] Attempting to connect to ${targetDevice.uuid}...`);
-            await this.connect(targetDevice.uuid); // connect() already saves the UUID via userConfig
-            console.log(`[AutoConnect] Successfully connected to ${targetDevice.uuid}`);
-            return true;
+            await this.connect(targetDevice.uuid); // connect() uses existing adapter if available
+            connected = await this.isConnected();
+            if (connected) {
+                console.log(`[AutoConnect] Successfully connected to ${targetDevice.uuid} after scan.`);
+            } else {
+                 console.log(`[AutoConnect] connect() method finished but isConnected() is false after scan.`);
+            }
         } catch (err) {
-            console.log(`[AutoConnect] Failed to connect to ${targetDevice.uuid}: ${err}`);
-            // Ensure disconnect is called if connect fails partially
+            console.log(`[AutoConnect] Failed to connect to ${targetDevice.uuid} after scan: ${err}`);
             await this.disconnect().catch(e => console.log(`[AutoConnect] Error during cleanup disconnect: ${e}`));
-            return false;
+            connected = false;
+        } finally {
+             // Clean up adapter if we created it just for this attempt
+             // Note: This might disconnect if connect() succeeded but didn't set its own adapter/destroy
+             // Need careful testing. For now, let's assume connect manages the adapter state if successful.
+             // if (this.destroy && !connected) { // Only destroy if we created it AND failed? Risky.
+             //     this.destroy();
+             //     this.destroy = undefined;
+             //     this.adapter = undefined;
+             // }
         }
+        return connected;
     }
 
     /**
@@ -159,10 +258,22 @@ export class LCT21001 {
                 await this.disconnect();
             }
 
+            // Ensure adapter exists, create if necessary (should usually exist if called from autoScanAndConnect)
             if (this.adapter === undefined) {
+                 console.log('[Connect] Adapter is undefined, creating new bluetooth instance...');
                 const { bluetooth, destroy } = createBluetooth();
-                this.destroy = destroy;
+                // IMPORTANT: We should manage this destroy function carefully.
+                // If called from autoScanAndConnect, the destroy from there should be used.
+                // If called directly, this new destroy needs handling on disconnect/cleanup.
+                // For now, let's assume autoScanAndConnect manages the primary destroy.
+                // If this causes issues, we might need a more robust singleton pattern for the adapter.
+                 if (!this.destroy) { // Only assign if not already set by another process like autoScan
+                     this.destroy = destroy;
+                 }
                 this.adapter = await bluetooth.defaultAdapter();
+                 console.log('[Connect] New bluetooth instance created.');
+            } else {
+                 console.log('[Connect] Using existing adapter.');
             }
 
             this.device = await this.adapter.getDevice(deviceUUID);
@@ -233,9 +344,10 @@ export class LCT21001 {
             await this.adapter.stopDiscovery().catch(noop);
         }
 
-        if (this.destroy !== undefined) {
-            this.destroy();
-        }
+        // Removed destroy() call - adapter should persist until explicit disconnect or app exit
+        // if (this.destroy !== undefined) {
+        //     this.destroy();
+        // }
     }
 
     async isDiscovering() {

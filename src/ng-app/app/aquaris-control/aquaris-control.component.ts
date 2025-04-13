@@ -113,32 +113,13 @@ export class AquarisControlComponent implements OnInit, AfterContentInit, OnDest
         console.log('[Frontend Aquaris] Checking initial connection status...');
         this.isConnected = await this.aquaris.isConnected();
         console.log(`[Frontend Aquaris] Initial isConnected check returned: ${this.isConnected}`);
+        // Auto-connect logic moved to main process (main.ts)
+        // This component will now rely on periodicUpdate to reflect the connection status.
         if (!this.isConnected) {
-            // Try to auto-connect to previously connected device
-            this.isConnecting = true;
-            try {
-                console.log('[Frontend Aquaris] Attempting autoScanAndConnect...');
-                const autoConnected = await this.aquaris.autoScanAndConnect();
-                console.log(`[Frontend Aquaris] autoScanAndConnect returned: ${autoConnected}`);
-                this.isConnected = autoConnected;
-                
-                if (autoConnected) {
-                    console.log("Auto-connected to previously paired Aquaris device");
-                    await this.updateState();
-                } else {
-                    // If auto-connect failed, start regular discovery
-                    // If auto-connect failed, start regular discovery
-                    console.log("[Frontend Aquaris] Auto-connect failed or returned false. Starting manual discovery.");
-                    await this.aquaris.startDiscover(); // This should trigger backend startDiscover handler
-                }
-            } catch (err) {
-                console.log('[Frontend Aquaris] autoScanAndConnect threw an error => ' + err);
-                // Fall back to regular discovery
-                console.log("[Frontend Aquaris] Falling back to manual discovery after error.");
-                await this.aquaris.startDiscover(); // This should trigger backend startDiscover handler
-            } finally {
-                this.isConnecting = false;
-            }
+             console.log("[Frontend Aquaris] Not connected initially. Waiting for periodic update or manual connection.");
+             // Optionally trigger a manual discovery if not connected after a short delay,
+             // but the main process should handle the auto-attempt.
+             // await this.aquaris.startDiscover(); // Keep manual discovery trigger if desired fallback
         }
         else { // Remove extra brace
              console.log("[Frontend Aquaris] Already connected according to isConnected check. Skipping auto-connect.");

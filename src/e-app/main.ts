@@ -128,7 +128,29 @@ app.whenReady().then( async () => {
         if (!success) { console.log('Failed to register global shortcut'); }
     }
     tccDBus = new TccDBusController();
-    startDbusAndInit();
+    await startDbusAndInit(); // Wait for DBus and main init
+
+    // Attempt Aquaris auto-connect after a short delay
+    const autoConnectDelayMs = 5000; // 5 seconds delay
+    console.log(`[Main] Scheduling Aquaris auto-connect attempt in ${autoConnectDelayMs / 1000} seconds.`);
+    setTimeout(async () => {
+        console.log('[Main] Attempting scheduled Aquaris auto-connect...');
+        const autoConnectHandler = aquarisHandlers.get(ClientAPI.prototype.autoScanAndConnect.name);
+        if (autoConnectHandler) {
+            try {
+                const connected = await autoConnectHandler();
+                console.log(`[Main] Scheduled auto-connect attempt finished. Connected: ${connected}`);
+                // Optionally, notify the renderer process if needed, though the component's periodic check should pick it up.
+                // if (tccWindow && connected) {
+                //     tccWindow.webContents.send('aquaris-connection-status-changed', true);
+                // }
+            } catch (err) {
+                console.error('[Main] Error during scheduled auto-connect attempt:', err);
+            }
+        } else {
+            console.error('[Main] Could not find autoScanAndConnect handler to schedule.');
+        }
+    }, autoConnectDelayMs);
 });
 
 async function startDbusAndInit() {
@@ -1155,64 +1177,119 @@ const aquarisHandlers = new Map<string, (...args: any[]) => any>()
         if (await aquarisConnectedDemo()) return;
         await userConfig.set('aquarisSaveState', JSON.stringify(aquarisStateCurrent));
     })
-    // Add handler for autoScanAndConnect with retry logic
-    // .set(ClientAPI.prototype.autoScanAndConnect.name, async () => {
-    //     console.log('[IPC Handler] autoScanAndConnect invoked.');
-    //     const MAX_RETRIES = 3;
-    //     const RETRY_DELAY_MS = 3000; // 3 seconds
+    // Add handler for autoScanAndConnect: Try direct connect with retries, then scan as fallback.
+    .set(ClientAPI.prototype.autoScanAndConnect.name, async () => {
+        console.log('[IPC Handler] autoScanAndConnect invoked.');
 
-    //     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    //         console.log(`[AutoConnect Handler] Attempt ${attempt}/${MAX_RETRIES}...`);
-    //         // Ensure connect isn't already in progress from another source/previous attempt
-    //         if (!aquarisConnectProgress && !await aquaris.isConnected()) {
-    //             aquarisConnectProgress = true;
-    //             try {
-    //                 const connected = await aquaris.autoScanAndConnect(); // This function now includes logs and delay
-    //                 if (connected) {
-    //                     console.log(`[AutoConnect Handler] Successfully connected on attempt ${attempt}.`);
-    //                     // Load saved state or default
-    //                     aquarisStateCurrent = {
-    //                         deviceUUID: await userConfig.get('aquarisDeviceUUID'),
-    //                         red: 255, green: 0, blue: 0, ledMode: RGBState.Static,
-    //                         fanDutyCycle: 50, pumpDutyCycle: 60, pumpVoltage: PumpVoltage.V8,
-    //                         ledOn: true, fanOn: true, pumpOn: true
-    //                     };
-    //                     const aquarisSavedSerialized = await userConfig.get('aquarisSaveState');
-    //                     if (aquarisSavedSerialized !== undefined) {
-    //                         aquarisStateExpected = JSON.parse(aquarisSavedSerialized) as AquarisState;
-    //                         aquarisStateExpected.deviceUUID = aquarisStateCurrent.deviceUUID;
-    //                     } else {
-    //                         aquarisStateExpected = Object.assign({}, aquarisStateCurrent);
-    //                     }
-    //                     await updateDeviceState(aquaris, aquarisStateCurrent, aquarisStateExpected, true);
-    //                     aquarisConnectProgress = false; // Release lock on success
-    //                     return true; // Exit loop and handler on success
-    //                 } else {
-    //                      console.log(`[AutoConnect Handler] Attempt ${attempt} failed (autoScanAndConnect returned false).`);
-    //                 }
-    //             } catch (err) {
-    //                 console.error(`[AutoConnect Handler] Error during attempt ${attempt}:`, err);
-    //                 // Potentially add more specific error handling if needed
-    //             } finally {
-    //                 aquarisConnectProgress = false; // Release lock after attempt (success or fail)
-    //             }
-    //         } else {
-    //              console.log(`[AutoConnect Handler] Skipping attempt ${attempt} as connection is already established or in progress.`);
-    //              if (await aquaris.isConnected()) {
-    //                  return true; // Already connected, return true
-    //              }
-    //         }
+        if (aquarisConnectProgress) {
+            console.log('[AutoConnect Handler] Connection attempt already in progress. Skipping.');
+            return await aquaris.isConnected();
+        }
+         if (await aquaris.isConnected()) {
+              console.log('[AutoConnect Handler] Already connected.');
+              return true;
+         }
 
-    //         // If not connected and not the last attempt, wait before retrying
-    //         if (attempt < MAX_RETRIES && !await aquaris.isConnected()) {
-    //             console.log(`[AutoConnect Handler] Waiting ${RETRY_DELAY_MS / 1000} seconds before next attempt...`);
-    //             await sleep(RETRY_DELAY_MS);
-    //         }
-    //     }
+        aquarisConnectProgress = true;
+        let connected = false;
+        let previouslyConnectedUUID;
+        const MAX_DIRECT_RETRIES = 3;
+        const RETRY_DELAY_MS = 2000; // 2 seconds between direct attempts
 
-    //     console.log(`[AutoConnect Handler] Failed to connect after ${MAX_RETRIES} attempts.`);
-    //     return false; // Return false after all retries failed
-    // })
-    ;
+        try {
+            previouslyConnectedUUID = await userConfig.get('aquarisDeviceUUID');
+            if (!previouslyConnectedUUID) {
+                console.log('[AutoConnect Handler] No previously connected device UUID found.');
+                aquarisConnectProgress = false;
+                return false;
+            }
+            console.log(`[AutoConnect Handler] Found previous UUID: ${previouslyConnectedUUID}`);
+
+            // --- Phase 1: Attempt Direct Connect (with retries) ---
+            for (let attempt = 1; attempt <= MAX_DIRECT_RETRIES; attempt++) {
+                 console.log(`[AutoConnect Handler] Direct Connect Attempt ${attempt}/${MAX_DIRECT_RETRIES}...`);
+                 try {
+                     await aquaris.connect(previouslyConnectedUUID); // connect() handles disconnect if needed
+                     connected = await aquaris.isConnected();
+                     if (connected) {
+                          console.log('[AutoConnect Handler] Direct connect successful.');
+                          break; // Exit retry loop on success
+                     } else {
+                          console.log('[AutoConnect Handler] Direct connect attempt finished, but isConnected is false.');
+                     }
+                 } catch (err) {
+                     console.log(`[AutoConnect Handler] Direct connect attempt ${attempt} failed: ${err.message}.`);
+                     connected = false;
+                 }
+                 // Wait before retrying direct connect if failed and not last attempt
+                 if (!connected && attempt < MAX_DIRECT_RETRIES) {
+                     console.log(`[AutoConnect Handler] Waiting ${RETRY_DELAY_MS / 1000}s before next direct attempt...`);
+                     await sleep(RETRY_DELAY_MS);
+                 }
+            }
+
+            // --- Phase 2: Scan and Connect (Fallback if direct connect failed) ---
+            if (!connected) {
+                console.log('[AutoConnect Handler] Direct connect failed after retries. Attempting scan...');
+                try {
+                    await aquaris.startDiscover();
+                    console.log('[AutoConnect Handler] Waiting 3 seconds for discovery...');
+                    await sleep(3000);
+                    const devices = await aquaris.getDeviceList();
+                    await aquaris.stopDiscover();
+                    console.log(`[AutoConnect Handler] Scan found ${devices.length} devices.`);
+
+                    const targetDevice = devices.find(device => device.uuid === previouslyConnectedUUID);
+                    if (targetDevice) {
+                        console.log(`[AutoConnect Handler] Found target ${targetDevice.uuid} via scan. Attempting connect...`);
+                        await aquaris.connect(targetDevice.uuid);
+                        connected = await aquaris.isConnected();
+                        if(connected) {
+                            console.log('[AutoConnect Handler] Connect after scan successful.');
+                        } else {
+                             console.log('[AutoConnect Handler] Connect after scan finished, but isConnected is false.');
+                        }
+                    } else {
+                        console.log(`[AutoConnect Handler] Target device ${previouslyConnectedUUID} not found after scan.`);
+                        connected = false;
+                    }
+                } catch (scanErr) {
+                     console.log(`[AutoConnect Handler] Scan/Connect phase failed: ${scanErr.message}`);
+                     connected = false;
+                }
+            }
+
+            // --- Final State Update ---
+            if (connected) {
+                console.log('[AutoConnect Handler] Loading/Applying device state...');
+                // (Load state logic remains the same as before)
+                aquarisStateCurrent = {
+                    deviceUUID: previouslyConnectedUUID,
+                    red: 255, green: 0, blue: 0, ledMode: RGBState.Static,
+                    fanDutyCycle: 50, pumpDutyCycle: 60, pumpVoltage: PumpVoltage.V8,
+                    ledOn: true, fanOn: true, pumpOn: true
+                };
+                const aquarisSavedSerialized = await userConfig.get('aquarisSaveState');
+                if (aquarisSavedSerialized !== undefined) {
+                    aquarisStateExpected = JSON.parse(aquarisSavedSerialized) as AquarisState;
+                    aquarisStateExpected.deviceUUID = aquarisStateCurrent.deviceUUID;
+                } else {
+                    aquarisStateExpected = Object.assign({}, aquarisStateCurrent);
+                }
+                await updateDeviceState(aquaris, aquarisStateCurrent, aquarisStateExpected, true);
+                console.log('[AutoConnect Handler] State applied.');
+            } else {
+                 console.log('[AutoConnect Handler] Failed to connect after all attempts.');
+            }
+
+        } catch (outerErr) {
+             console.error('[AutoConnect Handler] Unexpected outer error:', outerErr);
+             connected = false;
+        } finally {
+            aquarisConnectProgress = false; // Release lock
+        }
+
+        return connected;
+    });
 
 registerAPI(ipcMain, aquarisAPIHandle, aquarisHandlers);
