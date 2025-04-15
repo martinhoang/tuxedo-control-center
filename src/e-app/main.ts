@@ -1193,7 +1193,7 @@ const aquarisHandlers = new Map<string, (...args: any[]) => any>()
         aquarisConnectProgress = true;
         let connected = false;
         let previouslyConnectedUUID;
-        const MAX_DIRECT_RETRIES = 3;
+        const MAX_DIRECT_RETRIES = -1;
         const RETRY_DELAY_MS = 2000; // 2 seconds between direct attempts
 
         try {
@@ -1206,8 +1206,11 @@ const aquarisHandlers = new Map<string, (...args: any[]) => any>()
             console.log(`[AutoConnect Handler] Found previous UUID: ${previouslyConnectedUUID}`);
 
             // --- Phase 1: Attempt Direct Connect (with retries) ---
-            for (let attempt = 1; attempt <= MAX_DIRECT_RETRIES; attempt++) {
-                 console.log(`[AutoConnect Handler] Direct Connect Attempt ${attempt}/${MAX_DIRECT_RETRIES}...`);
+            let attempt = 1;
+            const infiniteRetries = MAX_DIRECT_RETRIES < 0;
+
+            while (infiniteRetries || attempt <= MAX_DIRECT_RETRIES) {
+                 console.log(`[AutoConnect Handler] Direct Connect Attempt ${attempt}${infiniteRetries ? '' : `/${MAX_DIRECT_RETRIES}`}...`);
                  try {
                      await aquaris.connect(previouslyConnectedUUID); // connect() handles disconnect if needed
                      connected = await aquaris.isConnected();
@@ -1218,14 +1221,22 @@ const aquarisHandlers = new Map<string, (...args: any[]) => any>()
                           console.log('[AutoConnect Handler] Direct connect attempt finished, but isConnected is false.');
                      }
                  } catch (err) {
-                     console.log(`[AutoConnect Handler] Direct connect attempt ${attempt} failed: ${err.message}.`);
+                     // Log the actual error, handling potential non-Error types
+                     const errorMessage = err instanceof Error ? err.message : String(err);
+                     console.log(`[AutoConnect Handler] Direct connect attempt ${attempt} failed: ${errorMessage}.`);
                      connected = false;
                  }
-                 // Wait before retrying direct connect if failed and not last attempt
-                 if (!connected && attempt < MAX_DIRECT_RETRIES) {
+
+                 // Wait before retrying direct connect if failed and not the last attempt (or if infinite)
+                 if (!connected && (infiniteRetries || attempt < MAX_DIRECT_RETRIES)) {
                      console.log(`[AutoConnect Handler] Waiting ${RETRY_DELAY_MS / 1000}s before next direct attempt...`);
                      await sleep(RETRY_DELAY_MS);
+                 } else if (!connected && !infiniteRetries && attempt >= MAX_DIRECT_RETRIES) {
+                     // Break if finite retries are exhausted
+                     console.log(`[AutoConnect Handler] Max direct connect retries (${MAX_DIRECT_RETRIES}) reached.`);
+                     break;
                  }
+                 attempt++; // Increment attempt counter only if we are going to retry
             }
 
             // --- Phase 2: Scan and Connect (Fallback if direct connect failed) ---
