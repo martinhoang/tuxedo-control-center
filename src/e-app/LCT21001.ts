@@ -80,6 +80,35 @@ export class LCT21001 {
         this.userConfig = userConfig;
     }
 
+    private async resetBluetoothState(destroyAdapter = false) {
+        try {
+            this.uartRx?.removeAllListeners();
+        } catch (err) {}
+
+        try {
+            if (this.adapter !== undefined && await this.adapter.isDiscovering()) {
+                await this.adapter.stopDiscovery().catch(noop);
+            }
+        } catch (err) {}
+
+        try {
+            await this.device?.cleanup();
+        } catch (err) {}
+
+        if (destroyAdapter && this.destroy !== undefined) {
+            try {
+                this.destroy();
+            } catch (err) {}
+            this.destroy = undefined;
+        }
+
+        this.device = undefined;
+        this.adapter = undefined;
+        this.uartRx = undefined;
+        this.uartTx = undefined;
+        this.connectedModel = undefined;
+    }
+
     public getConnectedModel(): LCTDeviceModel | undefined {
         return this.connectedModel;
     }
@@ -254,40 +283,27 @@ export class LCT21001 {
      */
     async connect(deviceUUID: string) {
         try {
-            if (this.device !== undefined && await this.device.isConnected()) {
+            if (this.device !== undefined || this.adapter !== undefined || this.uartTx !== undefined || this.uartRx !== undefined) {
                 await this.disconnect();
             }
 
-            // Ensure adapter exists, create if necessary (should usually exist if called from autoScanAndConnect)
-            if (this.adapter === undefined) {
-                 console.log('[Connect] Adapter is undefined, creating new bluetooth instance...');
-                const { bluetooth, destroy } = createBluetooth();
-                // IMPORTANT: We should manage this destroy function carefully.
-                // If called from autoScanAndConnect, the destroy from there should be used.
-                // If called directly, this new destroy needs handling on disconnect/cleanup.
-                // For now, let's assume autoScanAndConnect manages the primary destroy.
-                // If this causes issues, we might need a more robust singleton pattern for the adapter.
-                 if (!this.destroy) { // Only assign if not already set by another process like autoScan
-                     this.destroy = destroy;
-                 }
-                this.adapter = await bluetooth.defaultAdapter();
-                 console.log('[Connect] New bluetooth instance created.');
-            } else {
-                 console.log('[Connect] Using existing adapter.');
-            }
+            console.log('[Connect] Creating fresh bluetooth instance.');
+            const { bluetooth, destroy } = createBluetooth();
+            this.destroy = destroy;
+            this.adapter = await bluetooth.defaultAdapter();
 
             this.device = await this.adapter.getDevice(deviceUUID);
             const deviceName = await this.device.getName();
-            
+
             // Store the device UUID for future auto-connect
             if (this.userConfig) {
                 await this.userConfig.set('aquarisDeviceUUID', deviceUUID);
             }
-            
+
             // Create timeout promise to avoid hanging if connection fails
             const connectionTimeout = sleep(5000, 'timeout');
             const connect = this.device.connect();
-            
+
             const result = await Promise.race([connect, connectionTimeout]);
             if (result === 'timeout') {
                 await this.device.disconnect();
@@ -311,22 +327,30 @@ export class LCT21001 {
      * Disconnect from device and clean-up bluetooth initializations
      */
     async disconnect() {
-        if (this.device !== undefined && await this.device.isConnected()) {
+        const isConnected = await this.isConnected();
+
+        if (isConnected) {
             // Data written on disconnect by original control, seems to reset
             // or turn off configured parameters
-            try { await this.writeReset(); } catch(err) {}
-            try { await this.device.disconnect(); } catch (err) {}
-            this.device = undefined;
-            this.connectedModel = undefined;
+            try { await this.writeReset(); } catch (err) {}
         }
+
+        try {
+            if (this.device !== undefined) {
+                await this.device.disconnect();
+            }
+        } catch (err) {}
+
+        await this.resetBluetoothState(true);
     }
 
     async startDiscover() {
         try {
-            const { bluetooth, destroy } = createBluetooth();
-            this.destroy = destroy;
-
-            this.adapter = await bluetooth.defaultAdapter();
+            if (this.adapter === undefined) {
+                const { bluetooth, destroy } = createBluetooth();
+                this.destroy = destroy;
+                this.adapter = await bluetooth.defaultAdapter();
+            }
 
             if (! await this.adapter.isDiscovering()) {
                 await this.adapter.startDiscovery();
@@ -334,6 +358,7 @@ export class LCT21001 {
 
             return true;
         } catch (err) {
+            await this.resetBluetoothState(true);
             return false;
         }
     }
@@ -359,39 +384,45 @@ export class LCT21001 {
     }
 
     async getDeviceList() {
-        const deviceIds = await this.adapter.devices();
-        const deviceInfo = [];
-        let blDevice;
-        for (let deviceId of deviceIds) {
+        if (this.adapter === undefined) {
+            return [];
+        }
+
+        const deviceIds = await this.adapter.devices().catch(() => []);
+        const deviceInfo: DeviceInfo[] = [];
+
+        for (const deviceId of deviceIds) {
+            let blDevice: NodeBle.Device | undefined;
             try {
                 blDevice = await this.adapter.getDevice(deviceId);
+
+                const info = new DeviceInfo();
+                info.uuid = deviceId;
+
+                try {
+                    info.rssi = parseInt(await blDevice.getRSSI());
+                } catch (err) {
+                    continue;
+                }
+
+                try {
+                    info.name = await blDevice.getName();
+                } catch (err) {
+                    info.name = '';
+                }
+
+                const model = await this.deviceModelFromName(info.name);
+                if (model !== undefined) {
+                    deviceInfo.push(info);
+                }
             } catch (err) {
-                await blDevice.cleanup();
                 continue;
+            } finally {
+                try {
+                    await blDevice?.cleanup();
+                } catch (err) {}
             }
-            const info = new DeviceInfo();
-            info.uuid = deviceId;
-
-            try {
-                info.rssi = parseInt(await blDevice.getRSSI());
-            } catch (err) {
-                await blDevice.cleanup();
-                continue;
-            }
-
-            try {
-                info.name = await blDevice.getName();
-            } catch (err) {
-                info.name = '';
-            }
-
-            await blDevice.cleanup();
-
-            const model = await this.deviceModelFromName(info.name);
-            if (model !== undefined) {
-                deviceInfo.push(info);
-            }
-        };
+        }
 
         return deviceInfo;
     }

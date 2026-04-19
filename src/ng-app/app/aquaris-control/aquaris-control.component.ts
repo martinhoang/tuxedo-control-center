@@ -113,22 +113,17 @@ export class AquarisControlComponent implements OnInit, AfterContentInit, OnDest
         console.log('[Frontend Aquaris] Checking initial connection status...');
         this.isConnected = await this.aquaris.isConnected();
         console.log(`[Frontend Aquaris] Initial isConnected check returned: ${this.isConnected}`);
-        // Auto-connect logic moved to main process (main.ts)
-        // This component will now rely on periodicUpdate to reflect the connection status.
-        if (!this.isConnected) {
-             console.log("[Frontend Aquaris] Not connected initially. Waiting for periodic update or manual connection.");
-             // Optionally trigger a manual discovery if not connected after a short delay,
-             // but the main process should handle the auto-attempt.
-             // await this.aquaris.startDiscover(); // Keep manual discovery trigger if desired fallback
-        }
-        else { // Remove extra brace
-             console.log("[Frontend Aquaris] Already connected according to isConnected check. Skipping auto-connect.");
-            await this.updateState();
-            await this.periodicUpdate();
 
-            this.connectedTimeout = setInterval(async () => { await this.periodicUpdate(); }, 3000);
+        if (this.isConnected) {
+            console.log('[Frontend Aquaris] Already connected. Loading current device state.');
+            await this.updateState();
+        } else {
+            console.log('[Frontend Aquaris] Not connected initially. Starting discovery polling.');
         }
-    } // Correct closing brace for initCommunication method
+
+        await this.periodicUpdate();
+        this.connectedTimeout = setInterval(async () => { await this.periodicUpdate(); }, 3000);
+    }
 
     ngOnDestroy() {
         if (this.connectedTimeout !== undefined) {

@@ -102,6 +102,39 @@ app.on("ready", () => {
         if (tccWindow) {
             tccWindow.webContents.send("wakeup-from-suspend");
         }
+        if (aquarisWindow) {
+            aquarisWindow.webContents.send("wakeup-from-suspend");
+        }
+
+        setTimeout(async () => {
+            if (aquarisConnectProgress) {
+                console.log('[Resume] Skipping Aquaris recovery — connect already in progress.');
+                return;
+            }
+            const resumeTargetUUID = aquarisStateCurrent?.deviceUUID ?? aquarisStateExpected?.deviceUUID;
+
+            aquarisConnectProgress = true;
+            try {
+                console.log('[Resume] Resetting Aquaris bluetooth session after suspend.');
+                await aquaris.disconnect();
+                await stopSearch();
+
+                if (resumeTargetUUID !== undefined && resumeTargetUUID !== 'demo') {
+                    console.log(`[Resume] Reconnecting Aquaris device ${resumeTargetUUID}.`);
+                    await aquaris.connect(resumeTargetUUID);
+
+                    if (aquarisStateCurrent !== undefined && aquarisStateExpected !== undefined) {
+                        aquarisStateCurrent.deviceUUID = resumeTargetUUID;
+                        aquarisStateExpected.deviceUUID = resumeTargetUUID;
+                        await updateDeviceState(aquaris, aquarisStateCurrent, aquarisStateExpected, true);
+                    }
+                }
+            } catch (err) {
+                console.log('[Resume] Aquaris recovery failed => ' + err);
+            } finally {
+                aquarisConnectProgress = false;
+            }
+        }, 5000);
     });
 });
 
@@ -236,9 +269,13 @@ async function initMain() {
             if (tccdVersion.length > 0 && tccdVersion !== app.getVersion()) {
                 console.log('Other tccd version detected, restarting..');
                 process.on('exit', function () {
+                    const restartArgs = process.argv.slice(1).concat(['--tray']);
+                    if (!restartArgs.includes('--no-tccd-version-check')) {
+                        restartArgs.push('--no-tccd-version-check');
+                    }
                     child_process.spawn(
                         process.argv[0],
-                        process.argv.slice(1).concat(['--tray']),
+                        restartArgs,
                         {
                             cwd: process.cwd(),
                             detached : true,
@@ -1103,11 +1140,7 @@ const aquarisHandlers = new Map<string, (...args: any[]) => any>()
         if (aquarisIoProgress) {
             return true;
         } else {
-            const isConnected = await aquaris.isConnected();
-            if (!isConnected && aquarisStateExpected !== undefined) {
-                aquarisStateExpected.deviceUUID = undefined;
-            }
-            return isConnected;
+            return await aquaris.isConnected();
         }
     })
 
@@ -1193,7 +1226,7 @@ const aquarisHandlers = new Map<string, (...args: any[]) => any>()
         aquarisConnectProgress = true;
         let connected = false;
         let previouslyConnectedUUID;
-        const MAX_DIRECT_RETRIES = -1;
+        const MAX_DIRECT_RETRIES = 3;
         const RETRY_DELAY_MS = 2000; // 2 seconds between direct attempts
 
         try {
